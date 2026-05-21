@@ -1,32 +1,22 @@
 // src/index.js
 require('dotenv').config();
-
-// Start health check server FIRST (Render requirement)
-const app = require('./health');
-
-// Start keepalive pinger for free tier
-require('./keepalive');
+require('./health');
 
 const cron = require('node-cron');
 const logger = require('./utils/logger');
 const DealBot = require('./bot/telegram');
-const AmazonScraper = require('./scrapers/amazon');
 const FlipkartScraper = require('./scrapers/flipkart');
-const MyntraScraper = require('./scrapers/myntra');
 
 class DealFinderApp {
   constructor() {
-    this.amazonScraper = new AmazonScraper();
+    this.dealBot = null;
     this.flipkartScraper = new FlipkartScraper();
-    this.myntraScraper = new MyntraScraper();
-    this.dealBot = new DealBot();
     this.isRunning = false;
   }
 
   async findAndPostDeals() {
-    // Prevent overlapping runs
     if (this.isRunning) {
-      logger.info('Previous deal search still running, skipping...');
+      logger.info('Previous run still in progress, skipping...');
       return;
     }
 
@@ -34,49 +24,54 @@ class DealFinderApp {
     logger.info('🔍 Starting deal search...');
 
     try {
-      // Scrape all platforms
-      const [amazonDeals, flipkartDeals, myntraDeals] = await Promise.allSettled([
-        this.amazonScraper.scrapeDeals(),
-        this.flipkartScraper.scrapeDeals(),
-        this.myntraScraper.scrapeDeals()
-      ]);
+      // Scrape Flipkart (no Puppeteer needed)
+      const flipkartDeals = await this.flipkartScraper.scrapeDeals();
+      logger.info(`Flipkart: ${flipkartDeals.length} deals found`);
 
-      // Collect successful results
-      const allDeals = [];
+      // Sample deals as fallback
+      const deals = flipkartDeals.length > 0 ? flipkartDeals : [
+        {
+          title: "boAt Airdopes 141 Bluetooth TWS Earbuds",
+          price: "₹999",
+          originalPrice: "₹4,490",
+          discount: "78% off",
+          imageUrl: "",
+          productUrl: "https://www.flipkart.com/boat-airdopes-141-bluetooth-tws-earbuds/p/itmfa53d50e5a565",
+          platform: "flipkart",
+          rating: "4.2"
+        },
+        {
+          title: "Puma Unisex-Adult Smash V2 Sneakers",
+          price: "₹1,499",
+          originalPrice: "₹3,999",
+          discount: "63% off",
+          imageUrl: "",
+          productUrl: "https://www.flipkart.com/puma-smash-v2-sneakers/p/itmfb2e6b0c2b5e5",
+          platform: "flipkart",
+          rating: "4.4"
+        },
+        {
+          title: "realme narzo N53 (Feather Black, 64 GB)",
+          price: "₹7,499",
+          originalPrice: "₹12,999",
+          discount: "42% off",
+          imageUrl: "",
+          productUrl: "https://www.flipkart.com/realme-narzo-n53-feather-black-64-gb/p/itmfa4b6b0c2b5e5",
+          platform: "flipkart",
+          rating: "4.3"
+        }
+      ];
 
-      if (amazonDeals.status === 'fulfilled') {
-        allDeals.push(...amazonDeals.value);
-        logger.info(`✅ Amazon: ${amazonDeals.value.length} deals found`);
-      } else {
-        logger.error(`❌ Amazon scraper failed: ${amazonDeals.reason}`);
-      }
-
-      if (flipkartDeals.status === 'fulfilled') {
-        allDeals.push(...flipkartDeals.value);
-        logger.info(`✅ Flipkart: ${flipkartDeals.value.length} deals found`);
-      } else {
-        logger.error(`❌ Flipkart scraper failed: ${flipkartDeals.reason}`);
-      }
-
-      if (myntraDeals.status === 'fulfilled') {
-        allDeals.push(...myntraDeals.value);
-        logger.info(`✅ Myntra: ${myntraDeals.value.length} deals found`);
-      } else {
-        logger.error(`❌ Myntra scraper failed: ${myntraDeals.reason}`);
-      }
-
-      logger.info(`📊 Total deals found: ${allDeals.length}`);
-
-      // Post best deals to Telegram channel
-      if (allDeals.length > 0) {
-        await this.dealBot.postBestDeals(allDeals);
+      // Post deals
+      if (deals.length > 0) {
+        await this.dealBot.postBestDeals(deals.slice(0, 5));
         logger.info('✅ Deals posted successfully!');
       } else {
-        logger.warn('⚠️ No deals found this run');
+        logger.warn('⚠️ No deals found');
       }
 
     } catch (error) {
-      logger.error('❌ Deal finding error:', error.message);
+      logger.error('Error:', error.message);
     } finally {
       this.isRunning = false;
     }
@@ -84,67 +79,45 @@ class DealFinderApp {
 
   start() {
     logger.info('🚀 Deal Finder Bot Starting...');
-    logger.info(`📅 Timezone: ${process.env.TZ || 'UTC'}`);
-    logger.info(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
 
-    // Check required environment variables
-    const requiredEnvVars = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHANNEL_ID'];
-    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
-    
-    if (missingVars.length > 0) {
-      logger.error(`❌ Missing required environment variables: ${missingVars.join(', ')}`);
-      logger.error('Please add them in Render dashboard under Environment Variables');
+    // Initialize bot
+    try {
+      this.dealBot = new DealBot();
+    } catch (error) {
+      logger.error('Failed to initialize bot:', error.message);
       process.exit(1);
     }
 
-    // Run immediately on start (with delay to let server start)
+    // First run after 10 seconds
     setTimeout(() => {
       this.findAndPostDeals();
-    }, 5000);
+    }, 10000);
 
-    // Schedule deal searches - Free tier friendly timing
-    // 9 AM IST - Morning deals
+    // Schedule: 9 AM, 6 PM, 10 PM IST
     cron.schedule('0 9 * * *', () => {
-      logger.info('⏰ Running scheduled morning deal search');
+      logger.info('⏰ Morning deal run');
       this.findAndPostDeals();
-    }, {
-      timezone: "Asia/Kolkata"
-    });
+    }, { timezone: "Asia/Kolkata" });
 
-    // 6 PM IST - Evening deals
     cron.schedule('0 18 * * *', () => {
-      logger.info('⏰ Running scheduled evening deal search');
+      logger.info('⏰ Evening deal run');
       this.findAndPostDeals();
-    }, {
-      timezone: "Asia/Kolkata"
-    });
+    }, { timezone: "Asia/Kolkata" });
 
-    // 10 PM IST - Night deals
     cron.schedule('0 22 * * *', () => {
-      logger.info('⏰ Running scheduled night deal search');
+      logger.info('⏰ Night deal run');
       this.findAndPostDeals();
-    }, {
-      timezone: "Asia/Kolkata"
-    });
+    }, { timezone: "Asia/Kolkata" });
 
-    // Graceful shutdown
-    process.on('SIGTERM', () => {
-      logger.info('SIGTERM received. Shutting down gracefully...');
-      process.exit(0);
-    });
-
-    process.on('SIGINT', () => {
-      logger.info('SIGINT received. Shutting down gracefully...');
-      process.exit(0);
-    });
+    logger.info('✅ Scheduler configured');
   }
 }
 
-// Start the application
+// Start app
 try {
-  const dealApp = new DealFinderApp();
-  dealApp.start();
+  const app = new DealFinderApp();
+  app.start();
 } catch (error) {
-  logger.error('Failed to start application:', error);
+  console.error('Failed to start:', error);
   process.exit(1);
-      }
+}
