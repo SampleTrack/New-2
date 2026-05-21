@@ -5,7 +5,7 @@ const logger = require('../utils/logger');
 
 class FlipkartScraper {
   constructor() {
-    this.baseUrl = process.env.FLIPKART_BASE_URL || 'https://www.flipkart.com';
+    this.baseUrl = 'https://www.flipkart.com';
   }
 
   async scrapeDeals() {
@@ -14,11 +14,9 @@ class FlipkartScraper {
       
       const response = await axios.get(`${this.baseUrl}/offers-store`, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Connection': 'keep-alive',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
         },
         timeout: 15000
       });
@@ -26,63 +24,36 @@ class FlipkartScraper {
       const $ = cheerio.load(response.data);
       const deals = [];
 
-      // Updated selectors for Flipkart 2024
-      $('._1AtVbE, ._2kHMtA, ._1xHGtK').each((index, element) => {
-        try {
-          const title = $(element).find('._4rR01T, .s1Q9rs, .IRpwTa').text().trim();
-          const price = $(element).find('._30jeq3, ._30jeq3._1_WHN1').text().trim();
-          const originalPrice = $(element).find('._3I9_wc, ._3I9_wc._27UcVY').text().trim();
-          const discount = $(element).find('._3Ay6Sb span, ._3Ay6Sb').first().text().trim();
-          const imageUrl = $(element).find('img._396cs4, img._2r_T1I').attr('src');
-          let productUrl = $(element).find('a._1fQZEK, a.s1Q9rs, a.IRpwTa').attr('href') || '';
-          
-          if (productUrl && !productUrl.startsWith('http')) {
-            productUrl = `${this.baseUrl}${productUrl}`;
-          }
+      $('._1AtVbE, ._2kHMtA, ._1xHGtK, ._13oc-S').each((i, el) => {
+        const title = $(el).find('._4rR01T, .s1Q9rs, .IRpwTa, div:first').text().trim();
+        const price = $(el).find('._30jeq3').text().trim();
+        const originalPrice = $(el).find('._3I9_wc').text().trim();
+        const discount = $(el).find('._3Ay6Sb').first().text().trim();
+        let productUrl = $(el).find('a').attr('href') || '';
 
-          if (title && price) {
-            deals.push({
-              title,
-              price,
-              originalPrice,
-              discount,
-              imageUrl,
-              productUrl,
-              platform: 'flipkart',
-              scrapedAt: new Date().toISOString()
-            });
-          }
-        } catch (err) {
-          // Skip malformed deals
+        if (productUrl && !productUrl.startsWith('http')) {
+          productUrl = this.baseUrl + productUrl;
+        }
+
+        if (title && price) {
+          deals.push({
+            title,
+            price,
+            originalPrice,
+            discount,
+            imageUrl: '',
+            productUrl: productUrl || this.baseUrl,
+            platform: 'flipkart',
+            rating: ''
+          });
         }
       });
 
-      // If no deals found with main selector, try alternative
-      if (deals.length === 0) {
-        $('._13oc-S, ._2kSfQ4').each((index, element) => {
-          const title = $(element).find('div:first').text().trim();
-          const price = $(element).find('._30jeq3').text().trim();
-          
-          if (title && price) {
-            deals.push({
-              title,
-              price,
-              originalPrice: '',
-              discount: '',
-              imageUrl: '',
-              productUrl: `${this.baseUrl}${$(element).find('a').attr('href') || ''}`,
-              platform: 'flipkart',
-              scrapedAt: new Date().toISOString()
-            });
-          }
-        });
-      }
-
-      logger.info(`Scraped ${deals.length} deals from Flipkart`);
+      logger.info(`Found ${deals.length} Flipkart deals`);
       return deals.slice(0, 10);
 
     } catch (error) {
-      logger.error('Flipkart scraping error:', error.message);
+      logger.error(`Flipkart error: ${error.message}`);
       return [];
     }
   }
